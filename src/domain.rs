@@ -99,3 +99,39 @@ mod tests {
         );
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SubtitleMode {
+    #[default]
+    AutoFirst,
+    TranscribeFirst,
+    Both,
+    TranscribeOnly,
+    AutoOnly,
+}
+impl SubtitleMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AutoFirst => "auto-first",
+            Self::TranscribeFirst => "transcribe-first",
+            Self::Both => "both",
+            Self::TranscribeOnly => "transcribe-only",
+            Self::AutoOnly => "auto-only",
+        }
+    }
+}
+impl std::str::FromStr for SubtitleMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto-first" => Ok(Self::AutoFirst),
+            "transcribe-first" => Ok(Self::TranscribeFirst),
+            "both" => Ok(Self::Both),
+            "transcribe-only" => Ok(Self::TranscribeOnly),
+            "auto-only" => Ok(Self::AutoOnly),
+            _ => {
+                Err("Use auto-first, transcribe-first, both, transcribe-only, or auto-only".into())
+            }
+        }
+    }
+}

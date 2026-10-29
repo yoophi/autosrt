@@ -1,16 +1,21 @@
-use crate::application::{Error, Result};
+use crate::{
+    application::{Error, Result},
+    domain::SubtitleMode,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
+
+pub const LANGUAGE_CODES: &str = "auto en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue";
 
 // Language codes accepted by whisper.cpp's g_lang table, plus auto-detection.
 pub fn normalize_language(raw: &str) -> std::result::Result<String, String> {
     let value = raw.trim().to_ascii_lowercase();
-    const CODES: &str = "auto en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue";
-    if CODES.split_whitespace().any(|c| c == value) {
+
+    if LANGUAGE_CODES.split_whitespace().any(|c| c == value) {
         Ok(value)
     } else {
         Err(format!(
-            "Unsupported language {raw:?}; use a Whisper language code such as ko, en, ja, or auto"
+            "Unsupported language {raw:?}; use a supported automatic-caption / source-speech language code such as ko, en, ja, or auto"
         ))
     }
 }
@@ -21,6 +26,8 @@ struct Settings {
     lang: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subtitle_mode: Option<String>,
     // Preserve unrelated settings when updating lang.
     #[serde(flatten)]
     other: BTreeMap<String, serde_json::Value>,
@@ -84,6 +91,20 @@ impl ConfigFile {
         let value = normalize_language(value).map_err(Error::Message)?;
         let mut settings = self.read()?;
         settings.lang = Some(value);
+        self.save(&settings)
+    }
+    pub fn subtitle_mode(&self) -> Result<SubtitleMode> {
+        self.read()?
+            .subtitle_mode
+            .as_deref()
+            .unwrap_or("auto-first")
+            .parse()
+            .map_err(Error::Message)
+    }
+    pub fn set_subtitle_mode(&self, value: &str) -> Result<()> {
+        let mode: SubtitleMode = value.parse().map_err(Error::Message)?;
+        let mut settings = self.read()?;
+        settings.subtitle_mode = Some(mode.as_str().into());
         self.save(&settings)
     }
     pub fn model(&self) -> Result<Option<PathBuf>> {

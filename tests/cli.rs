@@ -22,7 +22,14 @@ if os.environ.get('FAIL_TOOL')==name:
 if os.environ.get('WAIT_TOOL')==name:
     print('waiting',flush=True);time.sleep(30)
 if name=='yt-dlp':
-    if '--dump-single-json' in a: print(json.dumps({'id':'test-video','is_live':False}))
+    if '--dump-single-json' in a:
+        print(json.dumps({'id':'test-video','is_live':bool(os.environ.get('LIVE_VIDEO')), 'language':'ko',
+            'automatic_captions':json.loads(os.environ.get('AUTO_TRACKS','{}'))}))
+    elif '--write-auto-subs' in a:
+        if os.environ.get('FAIL_CAPTIONS'): print('caption HTTP 403',file=sys.stderr);sys.exit(7)
+        lang=a[a.index('--sub-langs')+1].strip('^$')
+        p=pathlib.Path(a[a.index('-o')+1].replace('%(ext)s',lang+'.srt'))
+        p.write_text('bad SRT' if os.environ.get('BAD_CAPTIONS') else '1\n00:00:00,000 --> 00:00:01,200\n자동 자막\n\n')
     else:
         p=pathlib.Path(a[a.index('-o')+1].replace('%(id)s','test-video').replace('%(ext)s','mkv'))
         p.write_bytes(b'video')
@@ -321,7 +328,10 @@ fn config_set_get_list_and_language_precedence() {
     assert_ok(&config_command(d.path(), &["config", "set", "lang", "KO"]));
     let list = config_command(d.path(), &["config", "list"]);
     assert_ok(&list);
-    assert_eq!(String::from_utf8_lossy(&list.stdout), "lang=ko\n");
+    assert_eq!(
+        String::from_utf8_lossy(&list.stdout),
+        "subtitle-mode=auto-first\nlang=ko\n"
+    );
     assert_eq!(
         config_command(d.path(), &["config", "get", "lang"]).stdout,
         b"ko\n"
@@ -360,12 +370,14 @@ fn config_rejects_invalid_input_without_clobbering() {
     assert_ok(&config_command(d.path(), &["config", "set", "lang", "en"]));
     let p = d.path().join("config/config.json");
     let before = fs::read(&p).unwrap();
-    for args in [
-        vec!["config", "set", "lang", "zz"],
-        vec!["config", "set", "typo", "ko"],
-        vec!["config", "get", "typo"],
+    for (args, code) in [
+        (vec!["config", "set", "lang", "zz"], 1),
+        (vec!["config", "set", "lang", "ko-KR"], 1),
+        (vec!["config", "set", "subtitle-mode", "invalid"], 1),
+        (vec!["config", "set", "typo", "ko"], 2),
+        (vec!["config", "get", "typo"], 2),
     ] {
-        assert!(!config_command(d.path(), &args).status.success());
+        assert_eq!(config_command(d.path(), &args).status.code(), Some(code));
         assert_eq!(fs::read(&p).unwrap(), before);
     }
     fs::write(&p, "{broken").unwrap();
@@ -630,4 +642,350 @@ fn damaged_utf8_transcript_is_replaced_with_visible_warning() {
             .unwrap()
             .contains('�')
     );
+}
+
+fn with_captions(dir: &Path, mode: &str) -> Command {
+    let mut c = command(dir, "https://youtu.be/xxx");
+    c.args(["--subtitle-mode", mode, "--language", "ko"])
+        .env("AUTO_TRACKS", r#"{"ko":[{"ext":"srt"}]}"#);
+    c
+}
+#[test]
+fn automatic_subtitles_need_no_model_or_transcription_tools() {
+    let d = setup();
+    for tool in ["ffmpeg", "ffprobe", "whisper-cli"] {
+        fs::remove_file(d.path().join(tool)).unwrap();
+    }
+    std::os::unix::fs::symlink("/usr/bin/python3", d.path().join("python3")).unwrap();
+    let r = with_captions(d.path(), "auto-first")
+        .env("PATH", d.path())
+        .env_remove("AUTOSRT_MODEL")
+        .env_remove("YSTT_MODEL")
+        .output()
+        .unwrap();
+    assert_ok(&r);
+    assert_eq!(String::from_utf8_lossy(&r.stdout), "test-video.srt\n");
+    assert!(
+        fs::read_to_string(d.path().join("test-video.srt"))
+            .unwrap()
+            .contains("자동 자막")
+    );
+    let calls = fs::read_to_string(d.path().join("calls.jsonl")).unwrap();
+    for flag in [
+        "--skip-download",
+        "--write-auto-subs",
+        "--no-write-subs",
+        "--convert-subs",
+        "^ko$",
+    ] {
+        assert!(calls.contains(flag), "{calls}");
+    }
+    assert!(!calls.contains("whisper-cli"));
+    assert!(!calls.contains("bv*+ba/b"));
+}
+#[test]
+fn automatic_subtitle_errors_and_absence_fall_back_only_when_requested() {
+    for failure in ["FAIL_CAPTIONS", "BAD_CAPTIONS", "NO_TRACKS"] {
+        for mode in ["auto-first", "auto-only"] {
+            let d = setup();
+            let mut c = with_captions(d.path(), mode);
+            if failure == "NO_TRACKS" {
+                c.env("AUTO_TRACKS", "{}");
+            } else {
+                c.env(failure, "1");
+            }
+            let r = c.output().unwrap();
+            if mode == "auto-first" {
+                assert_ok(&r);
+                assert!(
+                    fs::read_to_string(d.path().join("test-video.srt"))
+                        .unwrap()
+                        .contains("안녕하세요")
+                );
+            } else {
+                assert_eq!(r.status.code(), Some(1));
+                assert!(r.stdout.is_empty());
+                assert!(!d.path().join("test-video.srt").exists());
+                assert!(
+                    !fs::read_to_string(d.path().join("calls.jsonl"))
+                        .unwrap()
+                        .contains("whisper-cli")
+                );
+            }
+        }
+    }
+}
+#[test]
+fn transcription_priority_and_explicit_only_mode() {
+    for mode in ["transcribe-first", "transcribe-only"] {
+        for fails in [false, true] {
+            let d = setup();
+            let mut c = with_captions(d.path(), mode);
+            if fails {
+                c.env("FAIL_TOOL", "whisper-cli");
+            }
+            let r = c.output().unwrap();
+            let calls = fs::read_to_string(d.path().join("calls.jsonl")).unwrap();
+            if fails && mode == "transcribe-only" {
+                assert!(!r.status.success());
+            } else {
+                assert_ok(&r);
+            }
+            assert_eq!(
+                calls.contains("--write-auto-subs"),
+                fails && mode == "transcribe-first"
+            );
+        }
+    }
+}
+#[test]
+fn both_outputs_are_distinct_and_conflicts_preserve_existing_files() {
+    let d = setup();
+    let r = with_captions(d.path(), "both")
+        .args(["--output", "result.srt"])
+        .output()
+        .unwrap();
+    assert_ok(&r);
+    assert_eq!(
+        String::from_utf8_lossy(&r.stdout),
+        "result.auto.srt\nresult.transcribed.srt\n"
+    );
+    assert!(
+        fs::read_to_string(d.path().join("result.auto.srt"))
+            .unwrap()
+            .contains("자동 자막")
+    );
+    assert!(
+        fs::read_to_string(d.path().join("result.transcribed.srt"))
+            .unwrap()
+            .contains("안녕하세요")
+    );
+    fs::write(d.path().join("result.auto.srt"), "preserve").unwrap();
+    fs::remove_file(d.path().join("result.transcribed.srt")).unwrap();
+    let r = with_captions(d.path(), "both")
+        .args(["--output", "result.srt"])
+        .output()
+        .unwrap();
+    assert!(!r.status.success());
+    assert!(r.stdout.is_empty());
+    assert_eq!(
+        fs::read_to_string(d.path().join("result.auto.srt")).unwrap(),
+        "preserve"
+    );
+    assert!(!d.path().join("result.transcribed.srt").exists());
+    assert_ok(
+        &with_captions(d.path(), "both")
+            .args(["--output", "result.srt", "--force"])
+            .output()
+            .unwrap(),
+    );
+}
+#[test]
+fn both_requires_successful_transcription_and_handles_missing_auto_track() {
+    let d = setup();
+    let r = with_captions(d.path(), "both")
+        .env("FAIL_TOOL", "whisper-cli")
+        .output()
+        .unwrap();
+    assert!(!r.status.success());
+    assert!(r.stdout.is_empty());
+    assert!(!d.path().join("test-video.auto.srt").exists());
+    let r = with_captions(d.path(), "both")
+        .env("AUTO_TRACKS", "{}")
+        .output()
+        .unwrap();
+    assert_ok(&r);
+    assert_eq!(
+        String::from_utf8_lossy(&r.stdout),
+        "test-video.transcribed.srt\n"
+    );
+}
+#[test]
+fn subtitle_mode_config_precedence_validation_and_local_behavior() {
+    let d = setup();
+    assert_ok(&config_command(
+        d.path(),
+        &["config", "set", "subtitle-mode", "both"],
+    ));
+    assert_eq!(
+        String::from_utf8_lossy(
+            &config_command(d.path(), &["config", "get", "subtitle-mode"]).stdout
+        ),
+        "both\n"
+    );
+    assert!(
+        !config_command(d.path(), &["config", "set", "subtitle-mode", "invalid"])
+            .status
+            .success()
+    );
+    let r = command(d.path(), "https://youtu.be/xxx")
+        .args(["--subtitle-mode", "auto-only", "-l", "ko"])
+        .env("AUTO_TRACKS", r#"{"ko":[{"ext":"srt"}]}"#)
+        .output()
+        .unwrap();
+    assert_ok(&r);
+    assert_eq!(String::from_utf8_lossy(&r.stdout), "test-video.srt\n");
+    assert_ok(&command(d.path(), "한글 sample.part.mp3").output().unwrap());
+    let r = command(d.path(), "한글 sample.part.mp3")
+        .args(["--subtitle-mode", "auto-only"])
+        .output()
+        .unwrap();
+    assert!(!r.status.success());
+}
+#[test]
+fn auto_language_selects_original_and_requested_language_is_exact() {
+    let d = setup();
+    let r = command(d.path(), "https://youtu.be/xxx")
+        .args(["--subtitle-mode", "auto-only", "-l", "auto"])
+        .env(
+            "AUTO_TRACKS",
+            r#"{"en":[{"ext":"srt"}],"ko-orig":[{"ext":"srt"}]}"#,
+        )
+        .output()
+        .unwrap();
+    assert_ok(&r);
+    assert!(
+        fs::read_to_string(d.path().join("calls.jsonl"))
+            .unwrap()
+            .contains("^ko-orig$")
+    );
+    let d = setup();
+    let r = with_captions(d.path(), "auto-only")
+        .env("AUTO_TRACKS", r#"{"en":[{"ext":"srt"}]}"#)
+        .output()
+        .unwrap();
+    assert!(!r.status.success());
+    assert!(!d.path().join("test-video.srt").exists());
+}
+
+#[test]
+fn automatic_first_is_default_and_subtitle_conversion_requires_ffmpeg() {
+    let d = setup();
+    let r = command(d.path(), "https://youtu.be/xxx")
+        .env("AUTO_TRACKS", r#"{"ko":[{"ext":"srt"}]}"#)
+        .env_remove("AUTOSRT_MODEL")
+        .env_remove("YSTT_MODEL")
+        .output()
+        .unwrap();
+    assert_ok(&r);
+    assert!(
+        !fs::read_to_string(d.path().join("calls.jsonl"))
+            .unwrap()
+            .contains("whisper-cli")
+    );
+    let d = setup();
+    fs::remove_file(d.path().join("ffmpeg")).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/python3", d.path().join("python3")).unwrap();
+    let r = with_captions(d.path(), "auto-only")
+        .env("PATH", d.path())
+        .env("AUTO_TRACKS", r#"{"ko":[{"ext":"vtt"}]}"#)
+        .output()
+        .unwrap();
+    assert_eq!(r.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&r.stderr).contains("Missing tool: ffmpeg"));
+    assert!(!d.path().join("test-video.srt").exists());
+}
+#[test]
+fn cancellation_during_caption_lookup_never_falls_back() {
+    let d = setup();
+    let mut child = with_captions(d.path(), "auto-first")
+        .env("WAIT_TOOL", "yt-dlp")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !fs::read_to_string(d.path().join("calls.jsonl"))
+        .unwrap_or_default()
+        .contains("yt-dlp")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGINT);
+    }
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert_eq!(status.code(), Some(130));
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("caption cancellation timeout");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        !fs::read_to_string(d.path().join("calls.jsonl"))
+            .unwrap()
+            .contains("whisper-cli")
+    );
+    assert!(!d.path().join("test-video.srt").exists());
+}
+
+#[test]
+fn transcription_first_falls_back_after_preflight_and_extraction_failures() {
+    for failure in [
+        "no-model",
+        "missing-model-file",
+        "missing-whisper",
+        "ffmpeg",
+    ] {
+        let d = setup();
+        let mut c = with_captions(d.path(), "transcribe-first");
+        match failure {
+            "no-model" => {
+                c.env_remove("AUTOSRT_MODEL").env_remove("YSTT_MODEL");
+            }
+            "missing-model-file" => {
+                c.arg("--model").arg(d.path().join("missing.bin"));
+            }
+            "missing-whisper" => {
+                fs::remove_file(d.path().join("whisper-cli")).unwrap();
+                std::os::unix::fs::symlink("/usr/bin/python3", d.path().join("python3")).unwrap();
+                c.env("PATH", d.path());
+            }
+            _ => {
+                c.env("FAIL_TOOL", failure);
+            }
+        }
+        let result = c.output().unwrap();
+        assert_ok(&result);
+        assert!(String::from_utf8_lossy(&result.stderr).contains("trying automatic subtitles"));
+        assert!(
+            fs::read_to_string(d.path().join("test-video.srt"))
+                .unwrap()
+                .contains("자동 자막")
+        );
+    }
+}
+
+#[test]
+fn invalid_options_and_loaded_config_do_not_attempt_caption_fallback() {
+    for invalid in ["mode", "language", "config"] {
+        let d = setup();
+        let mut c = base_command(d.path());
+        c.args(["--no-tui", "https://youtu.be/xxx"]);
+        match invalid {
+            "mode" => {
+                c.args(["--subtitle-mode", "invalid"]);
+            }
+            "language" => {
+                c.args(["--subtitle-mode", "transcribe-first", "--language", "ko-KR"]);
+            }
+            _ => {
+                fs::create_dir(d.path().join("config")).unwrap();
+                fs::write(d.path().join("config/config.json"), "invalid JSON").unwrap();
+                c.args(["--subtitle-mode", "transcribe-first"]);
+            }
+        }
+        let result = c.output().unwrap();
+        assert_eq!(
+            result.status.code(),
+            Some(if invalid == "config" { 1 } else { 2 })
+        );
+        assert!(result.stdout.is_empty());
+        assert!(!d.path().join("calls.jsonl").exists());
+    }
 }

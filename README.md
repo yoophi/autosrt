@@ -1,13 +1,13 @@
 # AutoSRT
 
-YouTube 영상이나 로컬 MP3·MP4 등의 음성을 **로컬에서 인식하여 SRT 자막으로 변환하는 Rust CLI**입니다. `ratatui` 진행 화면으로 다운로드, 음성 추출, 전사, 저장 상태를 확인합니다.
+YouTube 자동생성 자막을 다운로드하거나 영상·로컬 MP3·MP4 등의 음성을 **로컬에서 인식하여 SRT 자막을 생성하는 Rust CLI**입니다. `ratatui` 진행 화면으로 다운로드, 음성 추출, 전사, 저장 상태를 확인합니다.
 
 ```sh
 autosrt https://youtu.be/xxx
 autosrt example.mp3
 ```
 
-YouTube 입력은 설치된 `yt-dlp`로 영상을 다운로드합니다. 로컬 파일 입력은 다운로드를 생략합니다. 두 입력 모두 `ffmpeg` → `whisper-cli` → Rust SRT 생성 파이프라인을 사용합니다.
+YouTube 입력은 명령행이나 저장 설정에 모드가 없으면 설치된 `yt-dlp`로 자동자막을 먼저 확인합니다. 자동자막이 없으면 영상을 다운로드하여 `ffmpeg` → `whisper-cli` → Rust SRT 생성 파이프라인을 실행합니다. 로컬 파일은 다운로드 없이 전사하며, `--subtitle-mode`로 YouTube 자막 우선순위를 바꿀 수 있습니다.
 
 ## 설치
 
@@ -34,9 +34,9 @@ cargo install --path . --locked --root ~/.local
 
 | 도구 | 용도 | 필수 입력 |
 | --- | --- | --- |
-| `ffmpeg`, `ffprobe` | 오디오 검사 및 16 kHz mono PCM WAV 변환 | 모두 |
-| `whisper-cli` | whisper.cpp 기반 로컬 음성 인식 | 모두 |
-| `yt-dlp` | YouTube 미디어 다운로드 | YouTube URL |
+| `ffmpeg`, `ffprobe` | 오디오 검사 및 16 kHz mono PCM WAV 변환 | 음성 전사 시. 자막 형식 변환은 ffmpeg 필요 |
+| `whisper-cli` | whisper.cpp 기반 로컬 음성 인식 | 음성 전사 시 |
+| `yt-dlp` | YouTube 자동자막 조회·다운로드 및 미디어 다운로드 | YouTube URL |
 | 지원되는 JavaScript 런타임 및 yt-dlp EJS | YouTube 추출 지원 | YouTube 환경에 따라 필요 |
 
 설치는 각 프로젝트 공식 안내를 따르세요: [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation), [FFmpeg](https://ffmpeg.org/download.html), [whisper.cpp](https://github.com/ggml-org/whisper.cpp#quick-start). yt-dlp의 충분한 YouTube 지원에는 EJS와 지원되는 JavaScript 런타임이 필요하며, 공식 문서는 Deno를 권장합니다. [의존성 안내](https://github.com/yt-dlp/yt-dlp#dependencies)
@@ -49,7 +49,7 @@ autosrt config set model /absolute/path/to/ggml-small.bin
 autosrt doctor
 ```
 
-실행 시 모델 검사·다운로드 전에 필수 명령을 검사합니다. 누락된 명령이 있으면 목록과 PATH/설치 안내를 stderr에 출력하고 종료 코드 1로 종료합니다. URL 입력에는 `yt-dlp`, `ffmpeg`, `ffprobe`, `whisper-cli`가 필요하며, 로컬 입력에는 `yt-dlp`가 필요하지 않습니다. 프로그램이 도구를 자동 설치하지 않습니다.
+음성 전사를 시작할 때 모델 검사·미디어 다운로드 전에 전사용 필수 명령을 검사합니다. 누락된 명령이 있으면 목록과 PATH/설치 안내를 stderr에 출력하고 종료 코드 1로 종료합니다. URL의 음성 전사에는 `yt-dlp`, `ffmpeg`, `ffprobe`, `whisper-cli`가 필요하며, 로컬 입력에는 `yt-dlp`가 필요하지 않습니다. 프로그램이 도구를 자동 설치하지 않습니다.
 
 ### 의존성 진단
 
@@ -64,7 +64,7 @@ autosrt doctor --model /models/ggml-small.bin
 | `ffmpeg`, `ffprobe`, `whisper-cli`, `yt-dlp` | PATH 경로, 실제 버전 명령 실행, 종료 상태 |
 | yt-dlp 릴리스 | 버전 날짜가 90일 이상 오래되면 업데이트 경고 |
 | YouTube JS·EJS | yt-dlp가 실제 활성화한 런타임과 EJS 진단 정보 |
-| 설정 | 파일 경로, JSON 읽기, 기본 언어 유효성 |
+| 설정 | 파일 경로, JSON 읽기, 기본 언어·자막 모드 유효성 |
 | 모델 | 선택된 경로, 읽기 가능 여부, 파일 크기, GGML 헤더 |
 
 결과는 `[OK]`, `[WARN]`, `[FAIL]`로 출력합니다. 실패가 하나라도 있으면 종료 코드 1, 경고만 있거나 모두 정상이면 0을 반환합니다. 한 항목에 실패해도 나머지 검사를 계속해 문제를 한 번에 보여줍니다. 각 외부 명령에는 5초 제한이 있으며 응답이 멈추면 종료하고 실패로 표시합니다.
@@ -101,8 +101,9 @@ autosrt --help
 
 | 옵션 | 기본값 | 설명 |
 | --- | --- | --- |
+| `--subtitle-mode <MODE>` | 저장된 `subtitle-mode`, 없으면 `auto-first` | 자동자막·전사 우선순위 또는 모두 생성 |
 | `--model <PATH>` | `AUTOSRT_MODEL`, 없으면 저장된 `model` | whisper.cpp 모델 파일 |
-| `-l, --language <CODE>` / `--lang <CODE>` | 저장된 `lang`, 없으면 `auto` | 이번 실행의 인식 언어. 한국어는 `ko` |
+| `-l, --language <CODE>` / `--lang <CODE>` | 저장된 `lang`, 없으면 `auto` | 이번 실행의 자동자막 선택·음성 인식 언어. 한국어는 `ko` |
 | `-o, --output <PATH>` | 입력 이름 또는 영상 ID + `.srt` | 최종 자막 경로 |
 | `--force` | 꺼짐 | 기존 출력 파일 교체 |
 | `--no-tui` | 꺼짐 | 비대화형 실행: stdout에 SRT 경로, stderr에 진행/오류 |
@@ -231,7 +232,7 @@ autosrt --help
 autosrt doctor --help
 ```
 
-한 번에 URL 또는 파일 하나를 처리합니다. 성공하면 stdout에는 생성된 UTF-8 SRT 파일 경로 한 줄만 출력하고, 진행 로그와 오류는 stderr에 출력합니다. 종료 코드로 성공 여부를 판단하세요: 성공 `0`, 실행 오류 `1`, 인자 오류 `2`, 취소 `130`. 진행 로그는 고정된 기계 판독 형식이 아닙니다.
+한 번에 URL 또는 파일 하나를 처리합니다. 성공하면 stdout에는 생성된 UTF-8 SRT 파일 경로를 파일당 한 줄씩 출력하고 (`both`는 최대 두 줄), 진행 로그와 오류는 stderr에 출력합니다. 종료 코드로 성공 여부를 판단하세요: 성공 `0`, 실행 오류 `1`, 인자 오류 `2`, 취소 `130`. 진행 로그는 고정된 기계 판독 형식이 아닙니다.
 
 출력 디렉터리는 미리 만들어야 하며 기존 파일은 `--force`를 지정해야 교체합니다. 의존성·모델을 자동 설치하지 않습니다. `autosrt doctor`로 점검하고 `autosrt config set model /absolute/path/to/ggml-small.bin`으로 모델을 설정하세요. 설정 우선순위, 입력 제한, 재시도 지침은 `autosrt --help`에서 확인할 수 있습니다.
 
@@ -250,3 +251,60 @@ autosrt --no-tui 'https://youtu.be/SHGxL8DQOxs' --language en --output ./SHGxL8D
 ### Whisper가 SIGPIPE로 종료될 때
 
 일부 Whisper 출력에는 불완전한 UTF-8 토큰이 포함될 수 있습니다. AutoSRT는 로그를 바이트 단위로 읽고 표시할 때 손상된 바이트를 `�`로 대체하여 출력 파이프가 조기에 닫히지 않도록 합니다. 전사 JSON의 문자열에도 손상된 바이트가 있으면 `�`로 대체하고 TUI 또는 stderr에 경고를 표시합니다. 생성된 SRT에서 `�`가 있는 자막은 원음과 비교해 교정하세요. JSON 구조 오류는 자동 복구하지 않고 실패로 처리합니다. 이 처리는 GPU 초기화 실패 후 CPU 재시도와 별개입니다.
+
+## YouTube 자동생성 자막과 음성 전사 우선순위
+
+YouTube 입력은 **명령행·저장 설정에 모드가 없을 때 자동자막을 먼저 확인**합니다. 요청한 언어의 자동자막이 있으면 영상·음성을 다운로드하거나 Whisper를 실행하지 않고 SRT를 저장합니다. 없거나 다운로드에 실패하면 경고를 표시하고 음성을 전사합니다. 기존 방식만 사용하려면 `transcribe-only`를 지정하세요.
+
+```sh
+# 한국어 자동자막 우선, 없으면 한국어 음성 전사
+autosrt --no-tui 'https://youtu.be/HYkXmBCHtTE' --language ko
+
+# 음성 전사 우선, 실패하면 자동자막 시도
+autosrt URL --subtitle-mode transcribe-first
+
+# 두 종류를 각각 저장: result.auto.srt, result.transcribed.srt
+autosrt URL --language ko --subtitle-mode both --output result.srt
+
+# 자동자막만 다운로드 (없으면 오류, 음성 전사하지 않음)
+autosrt URL --language ko --subtitle-mode auto-only
+
+# 항상 음성 전사
+autosrt URL --subtitle-mode transcribe-only
+
+# 기본값 저장 / 조회
+autosrt config set subtitle-mode auto-first
+autosrt config get subtitle-mode
+autosrt config list
+```
+
+| 모드 | 처리 순서와 결과 |
+| --- | --- |
+| `auto-first` (기본) | 자동자막 → 없거나 실패하면 전사. SRT 하나 |
+| `transcribe-first` | 전사 → 처리 실패하면 자동자막. SRT 하나 |
+| `both` | 자동자막 확인·다운로드 후 전사. `.auto.srt`, `.transcribed.srt`로 분리 |
+| `auto-only` | 자동자막만 사용. 없거나 실패하면 종료 코드 1 |
+| `transcribe-only` | 자동자막 조회 없이 전사 |
+
+옵션 우선순위는 **`--subtitle-mode` → 설정 파일의 `subtitle_mode` → `auto-first`**입니다. 언어는 기존 `--language`/`lang` 설정을 함께 사용합니다. 지정 언어의 `ko-orig` 같은 원본 트랙이 있으면 우선 선택하고 없으면 `ko` 트랙을 사용합니다. `auto`는 영상 메타데이터의 원본 언어나 `-orig` 트랙을 선택합니다. 원본 언어를 알아낼 수 없으면 임의의 번역 언어를 고르지 않고 자동자막 없음으로 처리합니다. YouTube에서 제공하는 번역 자동자막이 명시한 언어로 선택될 수 있지만, Whisper 자체는 번역하지 않습니다. 수동 작성 자막은 대상이 아닙니다.
+
+자동자막의 타임스탬프와 텍스트는 유지합니다. YouTube의 겹치는 구간이나 반복 표시도 임의로 제거하지 않습니다. SRT가 제공되지 않으면 yt-dlp와 FFmpeg로 다른 자막 형식을 SRT로 변환합니다. [yt-dlp 자막 옵션](https://github.com/yt-dlp/yt-dlp#subtitle-options)
+
+로컬 파일은 `auto-only`를 제외한 모든 모드에서 전사만 수행하며 일반 `.srt` 하나를 생성합니다. `auto-only`에 로컬 파일을 지정하면 오류입니다. 자동자막 다운로드 성공 시 Whisper·모델은 필요하지 않고, SRT로 제공되는 자막은 FFmpeg도 필요하지 않습니다. `doctor`는 여전히 전체 전사 도구와 모델을 검사합니다.
+
+`both`에서 자동자막이 없으면 경고 후 `.transcribed.srt`만 생성합니다. 자동자막 다운로드 또는 전사가 실패하면 오류로 종료하며, 처리 실패 전에 결과 파일을 저장하지 않습니다. 기존 파일은 `--force` 없이는 덮어쓰지 않습니다. 두 파일은 각각 원자적으로 저장하지만 두 파일 전체가 하나의 트랜잭션은 아니므로 저장 도중 파일 시스템 오류나 취소가 발생하면 첫 파일만 남을 수 있습니다. 취소나 출력 파일 충돌은 다른 자막 소스로의 재시도를 유발하지 않습니다.
+
+### 언어와 대체 처리의 경계
+
+`--language`와 `config set lang`은 자동자막 트랙 선택과 원음 전사에 같은 언어 값을 사용합니다. 두 명령은 동일한 고정 언어 코드 목록만 허용하며, 전체 목록은 `autosrt --help`의 언어 옵션과 `autosrt config set --help`에 표시합니다. 임의의 YouTube 트랙 ID(`ko-orig`), 정규식, 지역 태그(`ko-KR`)는 직접 입력할 수 없습니다.
+
+`auto`는 자동자막에서 원본 트랙을 선택하고, 음성 전사에서는 초기 음성의 언어를 감지합니다. `both`에 한국어를 지정하면 두 소스 모두 한국어를 사용하므로, 한국어 번역 자동자막과 영어 원음 전사를 동시에 요청하는 설정이 아닙니다. 이 경우 출력 경로를 달리한 두 명령을 사용하세요.
+
+```sh
+autosrt URL --subtitle-mode auto-only --language ko --output translated-ko.srt
+autosrt URL --subtitle-mode transcribe-only --language en --output spoken-en.srt
+```
+
+`transcribe-first`는 전사 도구 누락, 모델 미설정·파일 부재, 미디어 다운로드·음성 추출·전사 실패에도 자동자막을 시도합니다. 인자 해석·입력 검증·설정 로딩 오류와 취소·출력 충돌·저장 오류는 대체 처리를 하지 않습니다. 자동자막에도 yt-dlp가 필요하고 형식 변환에는 ffmpeg가 필요하므로, 같은 의존성 부재로 대체 처리 역시 실패할 수 있습니다.
+
+`both`의 출력 소스는 stdout 경로 개수만으로 추정하지 말고 `.auto.srt` / `.transcribed.srt` 접미사로 구분하세요. `doctor`는 모델·Whisper까지 검사하므로 자동자막만 다운로드할 수 있는 환경에서도 실패할 수 있으며, 현재 자동자막 전용 진단 옵션은 없습니다.

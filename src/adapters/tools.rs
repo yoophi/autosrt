@@ -1,5 +1,8 @@
 use crate::{
-    application::{AudioExtractor, Context, Downloader, Error, Event, Result, Transcriber},
+    application::{
+        AudioExtractor, CaptionDocument, CaptionSource, Context, Downloader, Error, Event, Result,
+        Transcriber,
+    },
     domain::{Input, Segment},
 };
 use serde::Deserialize;
@@ -355,7 +358,7 @@ impl AudioExtractor for Ffmpeg {
 }
 
 pub struct Whisper {
-    pub model: PathBuf,
+    pub model: Option<PathBuf>,
     pub language: String,
 }
 #[derive(Deserialize)]
@@ -386,12 +389,36 @@ pub fn parse_transcript(json: &str) -> Result<Vec<Segment>> {
         .collect())
 }
 impl Transcriber for Whisper {
+    fn check(&self, youtube: bool) -> Result<()> {
+        let mut required = vec!["ffmpeg", "ffprobe", "whisper-cli"];
+        if youtube {
+            required.insert(0, "yt-dlp");
+        }
+        let missing: Vec<_> = required
+            .into_iter()
+            .filter(|t| find_tool(t).is_err())
+            .collect();
+        if !missing.is_empty() {
+            return Err(Error::Message(format!(
+                "Missing tool: {}. Install the required commands and add them to PATH (see README.md).",
+                missing.join(", ")
+            )));
+        }
+        let model = self.model.as_ref().ok_or_else(|| Error::Message("No speech model configured. Run: autosrt config set model /path/to/ggml-small.bin (or use --model / AUTOSRT_MODEL). See README.md.".into()))?;
+        if !std::fs::canonicalize(model)?.is_file() {
+            return Err(Error::Message("Model must be a file".into()));
+        }
+        Ok(())
+    }
     fn transcribe(&self, audio: &Path, work: &Path, ctx: &Context) -> Result<Vec<Segment>> {
         let prefix = work.join("transcript");
         let tool = find_tool("whisper-cli")?;
         let mut arguments = args(&[
             "-m".as_ref(),
-            self.model.as_os_str(),
+            self.model
+                .as_ref()
+                .ok_or_else(|| Error::Message("No speech model configured".into()))?
+                .as_os_str(),
             "-f".as_ref(),
             audio.as_os_str(),
             "-l".as_ref(),
@@ -433,4 +460,185 @@ impl Transcriber for Whisper {
         }
         parse_transcript(&json)
     }
+}
+
+impl CaptionSource for YtDlp {
+    fn fetch(
+        &self,
+        url: &str,
+        language: &str,
+        work: &Path,
+        ctx: &Context,
+    ) -> Result<Option<CaptionDocument>> {
+        let tool = find_tool("yt-dlp")?;
+        let mut metadata = String::new();
+        run(
+            &tool,
+            &args(&[
+                "--ignore-config".as_ref(),
+                "--no-playlist".as_ref(),
+                "--skip-download".as_ref(),
+                "--dump-single-json".as_ref(),
+                "--".as_ref(),
+                url.as_ref(),
+            ]),
+            ctx,
+            |line| {
+                if line.starts_with('{') {
+                    metadata.push_str(line);
+                }
+            },
+        )?;
+        let info: serde_json::Value = serde_json::from_str(&metadata)
+            .map_err(|e| Error::Message(format!("Invalid yt-dlp metadata: {e}")))?;
+        if info["is_live"].as_bool() == Some(true)
+            || matches!(
+                info["live_status"].as_str(),
+                Some("is_live" | "is_upcoming")
+            )
+        {
+            return Err(Error::Message(
+                "Live or upcoming video is not supported".into(),
+            ));
+        }
+        let Some(tracks) = info["automatic_captions"].as_object() else {
+            return Ok(None);
+        };
+        let available = |key: &str| {
+            tracks
+                .get(key)
+                .and_then(|v| v.as_array())
+                .is_some_and(|v| !v.is_empty())
+        };
+        let selected = if language == "auto" {
+            let original = info["language"].as_str().unwrap_or("");
+            [format!("{original}-orig"), original.to_owned()]
+                .into_iter()
+                .find(|k| available(k))
+                .or_else(|| {
+                    tracks
+                        .keys()
+                        .find(|k| k.ends_with("-orig") && available(k))
+                        .cloned()
+                })
+        } else {
+            [format!("{language}-orig"), language.to_owned()]
+                .into_iter()
+                .find(|k| available(k))
+        };
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        if !selected
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        {
+            return Err(Error::Message(
+                "Invalid automatic subtitle language identifier".into(),
+            ));
+        }
+        let id = info["id"]
+            .as_str()
+            .filter(|id| {
+                !id.is_empty()
+                    && id
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+            })
+            .ok_or_else(|| Error::Message("Invalid YouTube video ID in metadata".into()))?;
+        let has_srt = tracks[&selected]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["ext"] == "srt");
+        if !has_srt {
+            find_tool("ffmpeg")?;
+        }
+        let captions_dir = work.join("automatic");
+        std::fs::create_dir_all(&captions_dir)?;
+        let template = captions_dir.join("caption.%(ext)s");
+        let pattern = format!("^{selected}$");
+        ctx.stage("Downloading automatic subtitles")?;
+        run(
+            &tool,
+            &args(&[
+                "--ignore-config".as_ref(),
+                "--no-playlist".as_ref(),
+                "--skip-download".as_ref(),
+                "--no-simulate".as_ref(),
+                "--no-write-subs".as_ref(),
+                "--write-auto-subs".as_ref(),
+                "--sub-langs".as_ref(),
+                pattern.as_ref(),
+                "--sub-format".as_ref(),
+                "srt/vtt/best".as_ref(),
+                "--convert-subs".as_ref(),
+                "srt".as_ref(),
+                "-o".as_ref(),
+                template.as_os_str(),
+                "--".as_ref(),
+                url.as_ref(),
+            ]),
+            ctx,
+            |line| {
+                ctx.events.emit(Event::Log(line.to_owned()));
+            },
+        )?;
+        let path = captions_dir.join(format!("caption.{selected}.srt"));
+        let canonical = std::fs::canonicalize(&path)?;
+        if !canonical.starts_with(std::fs::canonicalize(&captions_dir)?) || !canonical.is_file() {
+            return Err(Error::Message("Invalid downloaded subtitle path".into()));
+        }
+        let srt = std::fs::read_to_string(canonical)?;
+        validate_downloaded_srt(&srt)?;
+        Ok(Some(CaptionDocument {
+            stem: id.into(),
+            srt,
+        }))
+    }
+}
+
+fn validate_downloaded_srt(srt: &str) -> Result<()> {
+    let normalized = srt.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+    let mut count = 0;
+    for block in normalized
+        .trim()
+        .split("\n\n")
+        .filter(|b| !b.trim().is_empty())
+    {
+        let mut lines = block.lines();
+        let index = lines.next().unwrap_or("").trim().parse::<u64>();
+        let timing = lines.next().unwrap_or("");
+        let stamps: Vec<_> = timing.split(" --> ").collect();
+        let parse = |s: &str| -> Option<u64> {
+            let values: Vec<u64> = s
+                .trim()
+                .split([':', ','])
+                .map(str::parse)
+                .collect::<std::result::Result<_, _>>()
+                .ok()?;
+            if values.len() != 4 || values[1] >= 60 || values[2] >= 60 || values[3] >= 1000 {
+                return None;
+            }
+            values[0]
+                .checked_mul(3_600_000)?
+                .checked_add(values[1] * 60_000 + values[2] * 1000 + values[3])
+        };
+        let valid_time = stamps.len() == 2
+            && parse(stamps[0])
+                .zip(parse(stamps[1]))
+                .is_some_and(|(a, b)| a < b);
+        if index.is_err() || !valid_time || !lines.any(|l| !l.trim().is_empty()) {
+            return Err(Error::Message(
+                "Downloaded automatic subtitles are not valid SRT".into(),
+            ));
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return Err(Error::Message(
+            "Downloaded automatic subtitles are empty".into(),
+        ));
+    }
+    Ok(())
 }

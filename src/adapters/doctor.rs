@@ -212,13 +212,17 @@ pub fn diagnose(local: bool, model_override: Option<PathBuf>) -> Report {
     let mut configured_model = None;
     match config {
         Ok(file) => {
-            match file.language() {
-                Ok(lang) => report.add(
+            match file
+                .language()
+                .and_then(|lang| file.subtitle_mode().map(|mode| (lang, mode)))
+            {
+                Ok((lang, mode)) => report.add(
                     Status::Ok,
                     "config",
                     format!(
-                        "{} | lang={lang}{}",
+                        "{} | lang={lang} | subtitle-mode={}{}",
                         file.path.display(),
+                        mode.as_str(),
                         if file.path.exists() {
                             ""
                         } else {
