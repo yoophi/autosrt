@@ -104,13 +104,30 @@ fn run(
     let stderr = child.stderr.take().unwrap();
     let drain = |stream: Box<dyn std::io::Read + Send>, tx: mpsc::SyncSender<String>| {
         thread::spawn(move || {
-            for line in BufReader::new(stream).lines() {
-                match line {
-                    Ok(line) => {
-                        if tx.send(line).is_err() {
+            // Engine logs can contain incomplete UTF-8 tokens. Decode only after
+            // reading bytes so a malformed caption cannot close the pipe and
+            // terminate a still-running child with SIGPIPE.
+            let mut reader = BufReader::new(stream);
+            let mut bytes = Vec::new();
+            loop {
+                bytes.clear();
+                match reader.read_until(b'\n', &mut bytes) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if bytes.last() == Some(&b'\n') {
+                            bytes.pop();
+                            if bytes.last() == Some(&b'\r') {
+                                bytes.pop();
+                            }
+                        }
+                        if tx
+                            .send(String::from_utf8_lossy(&bytes).into_owned())
+                            .is_err()
+                        {
                             break;
                         }
                     }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }
             }
@@ -407,6 +424,13 @@ impl Transcriber for Whisper {
                 Err(e) => return Err(e),
             }
         }
-        parse_transcript(&std::fs::read_to_string(prefix.with_extension("json"))?)
+        let bytes = std::fs::read(prefix.with_extension("json"))?;
+        let json = String::from_utf8_lossy(&bytes);
+        if matches!(json, std::borrow::Cow::Owned(_)) {
+            ctx.events.emit(Event::Warning(
+                "Whisper transcript contains invalid UTF-8; damaged bytes were replaced with � (U+FFFD). Review those captions.".into(),
+            ));
+        }
+        parse_transcript(&json)
     }
 }

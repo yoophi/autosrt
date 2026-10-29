@@ -23,6 +23,7 @@ pub enum Event {
     Stage(&'static str),
     Progress(f64),
     Log(String),
+    Warning(String),
 }
 pub trait Progress: Send + Sync {
     fn emit(&self, event: Event);

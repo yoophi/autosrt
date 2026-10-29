@@ -30,7 +30,7 @@ pub struct EventChannel(pub SyncSender<Event>);
 impl Progress for EventChannel {
     fn emit(&self, e: Event) {
         match e {
-            Event::Stage(_) | Event::Log(_) => {
+            Event::Stage(_) | Event::Log(_) | Event::Warning(_) => {
                 let _ = self.0.send(e);
             }
             _ => {
@@ -103,6 +103,13 @@ pub fn monitor<T: Send + 'static>(
                     Event::Log(s) => {
                         if tui {
                             logs.push(s);
+                        }
+                    }
+                    Event::Warning(s) => {
+                        if tui {
+                            logs.push(format!("WARNING: {s}"));
+                        } else {
+                            eprintln!("autosrt: warning: {s}");
                         }
                     }
                 }

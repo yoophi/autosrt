@@ -105,7 +105,7 @@ autosrt --help
 | `-l, --language <CODE>` / `--lang <CODE>` | 저장된 `lang`, 없으면 `auto` | 이번 실행의 인식 언어. 한국어는 `ko` |
 | `-o, --output <PATH>` | 입력 이름 또는 영상 ID + `.srt` | 최종 자막 경로 |
 | `--force` | 꺼짐 | 기존 출력 파일 교체 |
-| `--no-tui` | 꺼짐 | TUI 대신 stderr 진행 로그 |
+| `--no-tui` | 꺼짐 | 비대화형 실행: stdout에 SRT 경로, stderr에 진행/오류 |
 | `--keep-work` | 꺼짐 | 임시 작업 파일 보존 |
 
 TUI에서 `q` 또는 `Ctrl+C`를 누르면 실행 중인 작업을 취소합니다. 단계별 진행률과 생성 중인 자막을 포함한 전체 도구 출력을 표시하며, 진행률을 알 수 없으면 작업 중임을 표시합니다.
@@ -219,3 +219,34 @@ autosrt doctor
 ## 버전과 릴리스
 
 `YYYY.M.PATCH` CalVer를 사용합니다. 첫 릴리스는 `2026.10.0`입니다. [릴리스 정책과 배포 절차](docs/releases/RELEASING.md)를 참고하세요.
+
+## AI 에이전트와 스크립트에서 사용
+
+`--no-tui`는 입력 앞이나 뒤에 지정할 수 있습니다. 터미널 화면이나 입력 프롬프트 없이 실행합니다.
+
+```sh
+autosrt --no-tui 'https://youtu.be/VIDEO_ID' --output ./video.srt
+autosrt --no-tui ./example.mp3 --language ko --output ./example.srt
+autosrt --help
+autosrt doctor --help
+```
+
+한 번에 URL 또는 파일 하나를 처리합니다. 성공하면 stdout에는 생성된 UTF-8 SRT 파일 경로 한 줄만 출력하고, 진행 로그와 오류는 stderr에 출력합니다. 종료 코드로 성공 여부를 판단하세요: 성공 `0`, 실행 오류 `1`, 인자 오류 `2`, 취소 `130`. 진행 로그는 고정된 기계 판독 형식이 아닙니다.
+
+출력 디렉터리는 미리 만들어야 하며 기존 파일은 `--force`를 지정해야 교체합니다. 의존성·모델을 자동 설치하지 않습니다. `autosrt doctor`로 점검하고 `autosrt config set model /absolute/path/to/ggml-small.bin`으로 모델을 설정하세요. 설정 우선순위, 입력 제한, 재시도 지침은 `autosrt --help`에서 확인할 수 있습니다.
+
+### 같은 자막이 반복되거나 엉뚱한 언어로 인식될 때
+
+먼저 `autosrt config get lang`으로 저장된 인식 언어를 확인하세요. `--language`는 **원본 음성의 언어**이며 번역할 자막 언어가 아닙니다. 영어 음성을 `ko`로 강제하면 잘못된 한국어나 반복 문장이 생성될 수 있습니다.
+
+```sh
+autosrt --no-tui 'https://youtu.be/SHGxL8DQOxs' --language en --output ./SHGxL8DQOxs.en.srt
+```
+
+한국어 도입부 뒤에 영어 본문이 있는 영상에서는 `auto`도 처음의 한국어를 선택할 수 있습니다. 현재 엔진은 한 파일 안의 언어 전환을 자동 처리하지 않습니다. 본문 언어를 명시하거나, 각 언어 구간을 나누어 별도로 인식해야 합니다. 영어를 지정하면 한국어 도입부의 정확성은 보장되지 않습니다. 반복 문장을 삭제하는 것만으로 누락된 음성이 복구되지는 않습니다.
+
+`GPU initialization failed; retrying on CPU`는 CPU 전환 안내입니다. GPU 초기화 문제와 언어 불일치는 별도로 진단해야 하며, CPU에서 실행된다고 인식 결과가 올바른 것은 아닙니다. `doctor`는 실제 GPU 실행이나 전사 품질까지 검사하지 않습니다.
+
+### Whisper가 SIGPIPE로 종료될 때
+
+일부 Whisper 출력에는 불완전한 UTF-8 토큰이 포함될 수 있습니다. AutoSRT는 로그를 바이트 단위로 읽고 표시할 때 손상된 바이트를 `�`로 대체하여 출력 파이프가 조기에 닫히지 않도록 합니다. 전사 JSON의 문자열에도 손상된 바이트가 있으면 `�`로 대체하고 TUI 또는 stderr에 경고를 표시합니다. 생성된 SRT에서 `�`가 있는 자막은 원음과 비교해 교정하세요. JSON 구조 오류는 자동 복구하지 않고 실패로 처리합니다. 이 처리는 GPU 초기화 실패 후 CPU 재시도와 별개입니다.

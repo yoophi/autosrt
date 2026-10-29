@@ -1,3 +1,5 @@
+mod help;
+
 use autosrt::{
     adapters::{
         config::{ConfigFile, legacy_model_env, normalize_language},
@@ -23,44 +25,59 @@ use std::{
     version,
     args_conflicts_with_subcommands = true,
     subcommand_negates_reqs = true,
-    about = "Turn YouTube videos or local media into SRT subtitles using local speech recognition"
+    about = "Generate a UTF-8 SRT subtitle file from one YouTube URL or local media file",
+    after_long_help = help::ROOT,
+    after_help = "AI agents and scripts: autosrt --no-tui <URL_OR_FILE> --output <SRT_FILE>. Use --help for the full contract."
 )]
 struct Cli {
-    /// YouTube URL or local media file
-    #[arg(required = true)]
+    /// Exactly one YouTube video URL or existing local media file
+    #[arg(required = true, value_name = "URL_OR_FILE")]
     input: Option<String>,
     #[command(subcommand)]
     command: Option<Commands>,
     /// whisper.cpp multilingual model file
-    #[arg(long, env = "AUTOSRT_MODEL")]
+    #[arg(
+        long,
+        env = "AUTOSRT_MODEL",
+        hide_env_values = true,
+        value_name = "GGML_FILE"
+    )]
     model: Option<PathBuf>,
-    /// Spoken language (overrides saved lang; otherwise auto)
+    /// Source speech language, not subtitle translation (saved lang or auto)
     #[arg(short = 'l', long, visible_alias = "lang", value_parser = normalize_language)]
     language: Option<String>,
-    #[arg(short, long)]
+    /// Output SRT file; default: ./<input-stem-or-video-id>.srt. Parent must exist
+    #[arg(short, long, value_name = "SRT_FILE")]
     output: Option<PathBuf>,
-    /// Replace an existing subtitle file
+    /// Allow replacing the output file; never overwrite input media
     #[arg(long)]
     force: bool,
-    /// Disable the interactive terminal UI
+    /// Non-interactive agent mode: SRT path on stdout, progress/errors on stderr
     #[arg(long)]
     no_tui: bool,
-    /// Preserve downloaded media, extracted audio, and raw transcript
+    /// Keep temporary media/WAV/JSON on success, failure or cancellation; path on stderr
     #[arg(long)]
     keep_work: bool,
 }
 #[derive(Subcommand)]
 enum Commands {
     /// Diagnose dependencies, versions, configuration and model (offline)
+    #[command(after_long_help = help::DOCTOR)]
     Doctor {
         /// Check only dependencies needed for local media
         #[arg(long)]
         local: bool,
         /// Override the configured model for this check
-        #[arg(long, env = "AUTOSRT_MODEL")]
+        #[arg(
+            long,
+            env = "AUTOSRT_MODEL",
+            hide_env_values = true,
+            value_name = "GGML_FILE"
+        )]
         model: Option<PathBuf>,
     },
     /// Manage persistent user settings (no speech engine required)
+    #[command(after_long_help = help::CONFIG)]
     Config {
         #[command(subcommand)]
         action: ConfigAction,
@@ -69,14 +86,16 @@ enum Commands {
 #[derive(Subcommand)]
 enum ConfigAction {
     /// Copy legacy ystt settings and its model into the AutoSRT directory
+    #[command(after_long_help = help::MIGRATE)]
     Migrate,
     /// Save a default setting
+    #[command(after_long_help = help::SET)]
     Set { key: ConfigKey, value: String },
-    /// Print the effective default value
+    /// Print one saved value (lang defaults to auto; unset model is an error)
     Get { key: ConfigKey },
-    /// List effective default settings
+    /// Print saved defaults as key=value lines (no JSON; unset model omitted)
     List,
-    /// Print the configuration file path
+    /// Print the active config file path without creating the file
     Path,
 }
 #[derive(Clone, ValueEnum)]

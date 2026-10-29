@@ -33,8 +33,16 @@ elif name=='ffmpeg':
     pathlib.Path(a[-1]).write_bytes(b'wav')
     print('out_time_us=2000000')
 elif name=='whisper-cli':
+    if os.environ.get('INVALID_LOG_STREAM'):
+        import signal
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+        fd = 1 if os.environ['INVALID_LOG_STREAM']=='stdout' else 2
+        os.write(fd, b'invalid utf8: \xff\n')
+        for _ in range(2000): os.write(fd, b'continued output after invalid byte\n')
     p=pathlib.Path(a[a.index('-of')+1]+'.json')
     p.write_text(json.dumps({'transcription':[{'offsets':{'from':100,'to':1500},'text':' 안녕하세요 '}]}))
+    if os.environ.get('INVALID_JSON_TEXT'):
+        p.write_bytes(p.read_bytes().replace(b'\\uc548', b'\xff'))
     print('whisper_print_progress_callback: progress = 100%')
 "#).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
@@ -43,7 +51,7 @@ elif name=='whisper-cli':
     fs::write(dir.path().join("한글 sample.part.mp3"), b"fake-media").unwrap();
     dir
 }
-fn command(dir: &Path, input: &str) -> Command {
+fn base_command(dir: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_autosrt"));
     c.current_dir(dir)
         .env(
@@ -52,9 +60,68 @@ fn command(dir: &Path, input: &str) -> Command {
         )
         .env("AUTOSRT_CONFIG_DIR", dir.join("config"))
         .env("CALLS", dir.join("calls.jsonl"))
-        .env("AUTOSRT_MODEL", dir.join("model.bin"))
-        .args([input, "--no-tui"]);
+        .env("AUTOSRT_MODEL", dir.join("model.bin"));
     c
+}
+fn command(dir: &Path, input: &str) -> Command {
+    let mut c = base_command(dir);
+    c.args([input, "--no-tui"]);
+    c
+}
+#[test]
+fn agent_prefix_interface_has_clean_stdout_and_error_status() {
+    for input in ["한글 sample.part.mp3", "https://youtu.be/xxx"] {
+        let d = setup();
+        let output = d.path().join("agent result.srt");
+        let result = base_command(d.path())
+            .args(["--no-tui", input, "--output"])
+            .arg(&output)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_ok(&result);
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            format!("{}\n", output.display())
+        );
+        assert!(output.is_file());
+        assert!(!result.stderr.contains(&0x1b));
+        let failed = base_command(d.path())
+            .args(["--no-tui", input, "--output"])
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert_eq!(failed.status.code(), Some(1));
+        assert!(failed.stdout.is_empty());
+    }
+}
+#[test]
+fn help_is_available_without_dependencies_or_config_side_effects() {
+    let d = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["--help"],
+        vec!["doctor", "--help"],
+        vec!["config", "--help"],
+        vec!["config", "set", "--help"],
+    ] {
+        let result = base_command(d.path())
+            .env("PATH", d.path())
+            .env("AUTOSRT_MODEL", "/private/model-secret.bin")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_ok(&result);
+        let help = String::from_utf8(result.stdout).unwrap();
+        assert!(!help.contains("model-secret"));
+        assert!(help.contains("Usage:"));
+    }
+    assert!(!d.path().join("config").exists());
+    let extra = base_command(d.path())
+        .args(["--no-tui", "a.mp3", "b.mp3"])
+        .output()
+        .unwrap();
+    assert_eq!(extra.status.code(), Some(2));
+    assert!(extra.stdout.is_empty());
 }
 fn assert_ok(output: &Output) {
     assert!(
@@ -532,5 +599,35 @@ fn legacy_environment_names_still_work_and_new_names_win() {
             .arg("--force")
             .output()
             .unwrap(),
+    );
+}
+
+#[test]
+fn invalid_utf8_engine_logs_do_not_close_output_pipes() {
+    for stream in ["stdout", "stderr"] {
+        let d = setup();
+        let result = command(d.path(), "한글 sample.part.mp3")
+            .env("FAIL_GPU", "1")
+            .env("INVALID_LOG_STREAM", stream)
+            .output()
+            .unwrap();
+        assert_ok(&result);
+        assert!(d.path().join("한글 sample.part.srt").is_file());
+    }
+}
+
+#[test]
+fn damaged_utf8_transcript_is_replaced_with_visible_warning() {
+    let d = setup();
+    let result = command(d.path(), "한글 sample.part.mp3")
+        .env("INVALID_JSON_TEXT", "1")
+        .output()
+        .unwrap();
+    assert_ok(&result);
+    assert!(String::from_utf8_lossy(&result.stderr).contains("invalid UTF-8"));
+    assert!(
+        fs::read_to_string(d.path().join("한글 sample.part.srt"))
+            .unwrap()
+            .contains('�')
     );
 }
