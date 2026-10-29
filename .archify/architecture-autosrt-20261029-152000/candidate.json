@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AutoSRT Rust CLI 설계 · Hexagonal Architecture",
+    "locale": "ko",
+    "output": ".archify/architecture-autosrt-20261029-152000/autosrt.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "autosrt CLI · TUI",
+      "sublabel": "clap / ratatui",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        200,
+        76
+      ]
+    },
+    {
+      "id": "app",
+      "type": "backend",
+      "label": "실행 유스케이스",
+      "sublabel": "domain + ports",
+      "pos": [
+        350,
+        40
+      ],
+      "size": [
+        200,
+        76
+      ]
+    },
+    {
+      "id": "dl",
+      "type": "backend",
+      "label": "다운로드 어댑터",
+      "sublabel": "yt-dlp · URL 입력",
+      "pos": [
+        660,
+        40
+      ],
+      "size": [
+        200,
+        76
+      ]
+    },
+    {
+      "id": "media",
+      "type": "database",
+      "label": "미디어 파일",
+      "sublabel": "다운로드 / 로컬 입력",
+      "pos": [
+        970,
+        40
+      ],
+      "size": [
+        200,
+        76
+      ]
+    },
+    {
+      "id": "wav",
+      "type": "backend",
+      "label": "음성 추출 어댑터",
+      "sublabel": "ffmpeg · 16 kHz WAV",
+      "pos": [
+        970,
+        270
+      ],
+      "size": [
+        200,
+        76
+      ]
+    },
+    {
+      "id": "asr",
+      "type": "backend",
+      "label": "음성 인식 어댑터",
+      "sublabel": "whisper.cpp · JSON",
+      "pos": [
+        660,
+        270
+      ],
+      "size": [
+        200,
+        76
+      ]
+    },
+    {
+      "id": "srt",
+      "type": "backend",
+      "label": "자막 생성",
+      "sublabel": "검증 / 밀리초 / UTF-8",
+      "pos": [
+        350,
+        270
+      ],
+      "size": [
+        200,
+        76
+      ]
+    },
+    {
+      "id": "out",
+      "type": "database",
+      "label": "SRT 파일",
+      "sublabel": "원자적 저장",
+      "pos": [
+        40,
+        270
+      ],
+      "size": [
+        200,
+        76
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "ui-app",
+      "from": "ui",
+      "to": "app",
+      "label": "실행"
+    },
+    {
+      "id": "app-dl",
+      "from": "app",
+      "to": "dl",
+      "label": "URL"
+    },
+    {
+      "id": "dl-media",
+      "from": "dl",
+      "to": "media",
+      "label": "결과 경로"
+    },
+    {
+      "id": "media-wav",
+      "from": "media",
+      "to": "wav",
+      "label": "오디오 추출"
+    },
+    {
+      "id": "wav-asr",
+      "from": "wav",
+      "to": "asr",
+      "label": "PCM WAV"
+    },
+    {
+      "id": "asr-srt",
+      "from": "asr",
+      "to": "srt",
+      "label": "Segment"
+    },
+    {
+      "id": "srt-out",
+      "from": "srt",
+      "to": "out",
+      "label": "저장"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "입력과 실행",
+      "items": [
+        "autosrt https://youtu.be/xxx",
+        "autosrt example.mp3",
+        "로컬 파일은 다운로드 단계를 생략한다."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Hexagonal 경계",
+      "items": [
+        "application은 domain과 ports만 참조한다.",
+        "외부 도구·파일·진행 이벤트는 어댑터다.",
+        "main에서 구체 구현을 주입한다."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "진행 상황",
+      "items": [
+        "작업 이벤트를 ratatui 화면에 전달한다.",
+        "단계별 진행률·로그·경과 시간을 표시한다.",
+        "q / Ctrl+C 취소, 비TTY는 일반 로그."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "범위와 후속 작업",
+      "items": [
+        "그림은 런타임 데이터 흐름이다. 의존 방향은 docs/design.md 참조.",
+        "초기 버전: 단일 작업과 whisper-cli 엔진.",
+        "재개·배치·화자 분리는 후속 확장."
+      ]
+    }
+  ]
+}

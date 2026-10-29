@@ -1,0 +1,16 @@
+flowchart LR
+    ui["autosrt CLI · TUI: clap / ratatui"]
+    app["실행 유스케이스: domain + ports"]
+    dl["다운로드 어댑터: yt-dlp · URL 입력"]
+    media["미디어 파일: 다운로드 / 로컬 입력"]
+    wav["음성 추출 어댑터: ffmpeg · 16 kHz WAV"]
+    asr["음성 인식 어댑터: whisper.cpp · JSON"]
+    srt["자막 생성: 검증 / 밀리초 / UTF-8"]
+    out["SRT 파일: 원자적 저장"]
+    ui -->|실행| app
+    app -->|URL| dl
+    dl -->|결과 경로| media
+    media -->|오디오 추출| wav
+    wav -->|PCM WAV| asr
+    asr -->|Segment| srt
+    srt -->|저장| out

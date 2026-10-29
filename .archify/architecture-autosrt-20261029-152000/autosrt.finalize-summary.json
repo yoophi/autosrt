@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/Users/yoophi/project/audio-to-text/.archify/architecture-autosrt-20261029-152000/candidate.json",
+    "sha256": "0b590a513af4cdae14b9b5cdfd7fab1dcc363495fa3668865e91bbcbf466df4f",
+    "bytes": 4017
+  },
+  "artifact": {
+    "path": "/Users/yoophi/project/audio-to-text/.archify/architecture-autosrt-20261029-152000/autosrt.html",
+    "sha256": "80007dddefa9c3b4677f75ddfc70c1319b23ea4769458389637a3a0d8a923f3b",
+    "bytes": 845841
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/yoophi/project/audio-to-text/.archify/architecture-autosrt-20261029-152000/autosrt.finalize.json",
+    "summaryReceipt": "/Users/yoophi/project/audio-to-text/.archify/architecture-autosrt-20261029-152000/autosrt.finalize-summary.json",
+    "browserCheckReceipt": "/Users/yoophi/project/audio-to-text/.archify/architecture-autosrt-20261029-152000/autosrt.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-29T02:29:06.589Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3523,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

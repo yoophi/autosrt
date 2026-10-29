@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "9b03765e-c61b-4039-8da3-aaea8555aad9",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/yoophi/project/audio-to-text/.archify/architecture-autosrt-20261029-152000/candidate.json",
+  "output": "/Users/yoophi/project/audio-to-text/.archify/architecture-autosrt-20261029-152000/autosrt.html",
+  "specification": {
+    "sha256": "0b590a513af4cdae14b9b5cdfd7fab1dcc363495fa3668865e91bbcbf466df4f",
+    "bytes": 4017
+  },
+  "artifact": {
+    "sha256": "80007dddefa9c3b4677f75ddfc70c1319b23ea4769458389637a3a0d8a923f3b",
+    "bytes": 845841
+  }
+}

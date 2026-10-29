@@ -1,0 +1,10 @@
+/target/
+/.todos/
+*.srt
+*.wav
+*.mp3
+*.mp4
+*.mkv
+.DS_Store
+/dist/
+*.webm

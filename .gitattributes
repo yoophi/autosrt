@@ -1,0 +1,2 @@
+# Preserve generated Archify bytes and their verification receipts.
+.archify/** linguist-generated=true -whitespace
